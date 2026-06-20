@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compose — in-browser LSTM music generator</title>
+<meta name="description" content="An LSTM trained live in your browser tab on a small set of melodic phrases, generating and playing back new music.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#211A17;
+    --panel:#2B221D;
+    --panel-2:#332923;
+    --ink:#F2E8DD;
+    --ink-soft:rgba(242,232,221,0.62);
+    --ink-faint:rgba(242,232,221,0.38);
+    --accent:#E0708A;
+    --accent-soft:rgba(224,112,138,0.16);
+    --accent-ink:#3A1420;
+    --border:rgba(242,232,221,0.10);
+    --key-white:#F2E8DD;
+    --key-black:#4A3C35;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+
+  body{
+    min-height:100vh;
+    background:
+      radial-gradient(circle at 50% -10%, #2E241F, transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font-family:'Work Sans',sans-serif;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:40px 16px;
+  }
+
+  .app{
+    width:100%;
+    max-width:680px;
+    display:flex;
+    flex-direction:column;
+    gap:18px;
+  }
+
+  .masthead{padding:0 2px;}
+
+  .eyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    margin:0 0 10px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    font-weight:500;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--accent);
+  }
+
+  .eyebrow::before{
+    content:'';
+    width:7px;height:7px;border-radius:50%;
+    background:var(--accent);
+  }
+
+  .masthead h1{
+    margin:0 0 8px;
+    font-family:'Spectral',serif;
+    font-weight:600;
+    font-style:italic;
+    font-size:clamp(24px,4vw,30px);
+    color:var(--ink);
+  }
+
+  .masthead p{
+    margin:0;
+    font-size:13.5px;
+    line-height:1.6;
+    color:var(--ink-soft);
+    max-width:58ch;
+  }
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:20px 22px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+
+  .panel-head{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:10px;
+  }
+
+  .panel-head h2{
+    margin:0;
+    font-family:'Spectral',serif;
+    font-weight:600;
+    font-size:17px;
+    color:var(--ink);
+  }
+
+  .panel-head .meta{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+  }
+
+  .btn{
+    border:1px solid var(--border);
+    background:var(--panel-2);
+    color:var(--ink);
+    font-family:'Work Sans',sans-serif;
+    font-weight:500;
+    font-size:13px;
+    padding:10px 18px;
+    border-radius:9px;
+    cursor:pointer;
+    transition:background 0.15s ease,border-color 0.15s ease;
+  }
+
+  .btn:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent);}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+
+  .btn--primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600;}
+  .btn--primary:hover:not(:disabled){background:#E886A0;}
+
+  .btn-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
+
+  .train-readout{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    color:var(--ink-soft);
+    min-height:16px;
+  }
+
+  .loss-chart{
+    width:100%;
+    height:80px;
+    display:block;
+    border-radius:8px;
+    background:var(--panel-2);
+  }
+
+  .piano-roll{
+    width:100%;
+    height:160px;
+    display:block;
+    border-radius:8px;
+    background:var(--panel-2);
+  }
+
+  .empty-note{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    color:var(--ink-faint);
+    text-align:center;
+    padding:24px 0;
+  }
+
+  .footnote{
+    text-align:center;
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    color:var(--ink-faint);
+    padding:0 4px;
+    line-height:1.6;
+  }
+
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:0.001ms !important;animation-iteration-count:1 !important;}
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="masthead">
+    <span class="eyebrow">In-browser LSTM</span>
+    <h1>Compose something new.</h1>
+    <p>A small LSTM trains live in this tab — right now, on your CPU/GPU, no server — on a hand-written set of melodic phrases, then writes an original one note at a time.</p>
+  </header>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>1. Train</h2>
+      <span class="meta" id="dataMeta">loading…</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn--primary" id="trainBtn" disabled>Train model</button>
+      <span class="train-readout" id="trainReadout"></span>
+    </div>
+    <canvas class="loss-chart" id="lossChart"></canvas>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>2. Generate</h2>
+      <span class="meta" id="genMeta"></span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn--primary" id="generateBtn" disabled>Generate melody</button>
+      <button class="btn" id="playBtn" disabled>▶ Play</button>
+      <button class="btn" id="downloadBtn" disabled>Download .mid</button>
+    </div>
+    <canvas class="piano-roll" id="pianoRoll"></canvas>
+    <p class="empty-note" id="emptyNote">Train the model first, then generate a melody to see it here.</p>
+  </section>
+
+  <p class="footnote">Built-in training data: 22 short hand-written diatonic phrases (not a copyrighted piece) — enough to demonstrate the full pipeline, not a polished composer. For a richer result trained on 433 real Bach chorales, see the companion Jupyter notebook in this internship's other repo.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script>
+/* ---------- 1. Collect MIDI-style training data ----------
+   22 short, simple, hand-written diatonic phrases (C major / A minor, no
+   accidentals) encoded directly as pitch:duration tokens — a compact corpus
+   sized for training entirely client-side in seconds, not minutes. */
+const PHRASES = [
+  "60:1.0 62:1.0 64:1.0 65:1.0 67:1.0 69:1.0 71:1.0 72:2.0 71:1.0 69:1.0 67:2.0",
+  "67:1.0 67:1.0 69:1.0 67:1.0 72:1.0 71:2.0 67:1.0 67:1.0 69:1.0 67:1.0 74:1.0 72:2.0",
+  "69:1.0 71:1.0 72:1.0 71:1.0 69:1.0 67:1.0 65:1.0 64:2.0",
+  "60:0.5 62:0.5 64:0.5 65:0.5 67:0.5 69:0.5 71:0.5 72:1.0 71:0.5 69:0.5 67:0.5 65:0.5 64:0.5 62:0.5 60:1.0",
+  "65:1.0 67:1.0 69:1.0 71:1.0 72:2.0 71:1.0 69:1.0 67:1.0 65:2.0",
+  "60:1.0 64:1.0 67:1.0 72:1.0 REST:0.5 71:0.5 69:1.0 67:2.0",
+  "57:1.0 60:1.0 64:1.0 67:1.0 69:1.0 67:1.0 64:1.0 60:2.0",
+  "60:1.0 64:1.0 67:1.0 72:1.5 71:0.5 69:1.0 67:1.0 64:2.0",
+  "60:1.0 67:1.0 65:1.0 64:1.0 62:1.0 60:2.0 REST:1.0 64:1.0 67:1.0 72:2.0",
+  "72:1.0 71:1.0 69:1.0 67:1.0 65:1.0 64:1.0 62:1.0 60:2.0",
+  "60:0.5 62:0.5 64:0.5 60:0.5 65:1.0 64:1.0 REST:0.5 67:1.0 65:1.0 64:1.0 62:2.0",
+  "69:1.0 67:1.0 65:1.0 64:1.0 62:1.0 60:1.0 REST:1.0 64:1.0 67:1.0 71:1.0 72:2.0",
+  "67:1.5 69:0.5 71:1.0 72:1.0 74:1.0 72:1.0 71:1.0 69:1.0 67:2.0",
+  "60:1.0 64:1.0 65:1.0 67:1.0 69:1.0 67:1.0 65:1.0 64:1.0 62:1.0 60:2.0",
+  "64:1.0 65:1.0 67:1.0 69:1.0 71:1.0 72:1.0 74:1.0 76:2.0 74:1.0 72:1.0 71:1.0 69:1.0 67:2.0",
+  "57:1.0 59:1.0 60:1.0 62:1.0 64:1.0 62:1.0 60:1.0 59:1.0 57:2.0",
+  "60:1.0 62:1.0 64:1.0 65:1.0 64:1.0 62:1.0 60:2.0 REST:0.5 64:1.0 67:1.5",
+  "71:1.0 72:1.0 74:1.0 72:1.0 71:1.0 69:1.0 67:1.0 65:1.0 64:2.0",
+  "65:0.5 67:0.5 69:0.5 71:0.5 72:1.0 74:1.0 72:1.0 71:1.0 69:2.0",
+  "60:1.0 65:1.0 64:1.0 62:1.0 60:1.0 59:1.0 57:1.0 55:2.0",
+  "67:1.0 69:1.0 71:1.0 72:1.0 74:1.0 72:1.0 69:1.0 67:1.0 65:1.0 64:2.0",
+  "60:1.0 62:1.0 64:1.0 65:1.0 67:1.0 69:1.0 67:1.0 65:1.0 64:1.0 62:1.0 60:2.0",
+];
+
+const phrasesAsTokens = PHRASES.map(p => p.split(' '));
+const flatTokens = phrasesAsTokens.flat();
+
+/* ---------- 2. Preprocess into sequences ---------- */
+const SEQ_LEN = 6;
+const vocab = Array.from(new Set(flatTokens)).sort();
+const vocabSize = vocab.length;
+const tokenToIdx = new Map(vocab.map((t, i) => [t, i]));
+const idxToToken = vocab;
+
+const xsArr = [];
+const ysArr = [];
+phrasesAsTokens.forEach(tokens => {
+  const encoded = tokens.map(t => tokenToIdx.get(t));
+  for (let i = 0; i < encoded.length - SEQ_LEN; i++){
+    xsArr.push(encoded.slice(i, i + SEQ_LEN));
+    ysArr.push(encoded[i + SEQ_LEN]);
+  }
+});
+
+document.getElementById('dataMeta').textContent =
+  `${PHRASES.length} phrases · ${flatTokens.length} notes · vocab ${vocabSize} · ${xsArr.length} sequences`;
+
+/* ---------- 3 & 4. Build and train the LSTM ---------- */
+let model = null;
+let trained = false;
+
+function buildModel(){
+  const m = tf.sequential();
+  m.add(tf.layers.embedding({ inputDim: vocabSize, outputDim: 16, inputLength: SEQ_LEN }));
+  m.add(tf.layers.lstm({ units: 48, returnSequences: true }));
+  m.add(tf.layers.dropout({ rate: 0.2 }));
+  m.add(tf.layers.lstm({ units: 48 }));
+  m.add(tf.layers.dropout({ rate: 0.2 }));
+  m.add(tf.layers.dense({ units: 48, activation: 'relu' }));
+  m.add(tf.layers.dense({ units: vocabSize, activation: 'softmax' }));
+  m.compile({ optimizer: tf.train.adam(0.01), loss: 'sparseCategoricalCrossentropy', metrics: ['accuracy'] });
+  return m;
+}
+
+const trainBtn = document.getElementById('trainBtn');
+const trainReadout = document.getElementById('trainReadout');
+const lossChartCanvas = document.getElementById('lossChart');
+const lossCtx = lossChartCanvas.getContext('2d');
+const lossHistory = [];
+
+function resizeCanvas(canvas){
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+}
+
+function drawLossChart(){
+  resizeCanvas(lossChartCanvas);
+  const w = lossChartCanvas.width, h = lossChartCanvas.height;
+  lossCtx.clearRect(0, 0, w, h);
+  if (lossHistory.length < 2) return;
+  const max = Math.max(...lossHistory);
+  const min = Math.min(...lossHistory);
+  const range = (max - min) || 1;
+  lossCtx.strokeStyle = '#E0708A';
+  lossCtx.lineWidth = 2 * devicePixelRatio;
+  lossCtx.beginPath();
+  lossHistory.forEach((loss, i) => {
+    const x = (i / (lossHistory.length - 1)) * w;
+    const y = h - ((loss - min) / range) * (h * 0.82) - (h * 0.09);
+    if (i === 0) lossCtx.moveTo(x, y); else lossCtx.lineTo(x, y);
+  });
+  lossCtx.stroke();
+}
+
+async function trainModel(){
+  trainBtn.disabled = true;
+  lossHistory.length = 0;
+  model = buildModel();
+
+  const xs = tf.tensor2d(xsArr, [xsArr.length, SEQ_LEN], 'int32');
+  const ys = tf.tensor1d(ysArr, 'float32');
+
+  const EPOCHS = 120;
+  await model.fit(xs, ys, {
+    epochs: EPOCHS,
+    batchSize: 32,
+    shuffle: true,
+    callbacks: {
+      onEpochEnd: (epoch, logs) => {
+        lossHistory.push(logs.loss);
+        drawLossChart();
+        trainReadout.textContent = `epoch ${epoch + 1}/${EPOCHS} · loss ${logs.loss.toFixed(3)} · acc ${(logs.acc ?? logs.accuracy ?? 0).toFixed(3)}`;
+      },
+    },
+  });
+
+  xs.dispose();
+  ys.dispose();
+
+  trained = true;
+  trainBtn.disabled = false;
+  trainBtn.textContent = 'Retrain';
+  document.getElementById('generateBtn').disabled = false;
+  trainReadout.textContent += ' · done';
+}
+
+trainBtn.addEventListener('click', trainModel);
+
+/* ---------- 5. Generate a new sequence, visualize, play, export ---------- */
+function sampleWithTemperature(probs, temperature = 0.8){
+  const logits = probs.map(p => Math.log(p + 1e-9) / temperature);
+  const maxLogit = Math.max(...logits);
+  const exps = logits.map(l => Math.exp(l - maxLogit));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  const normalized = exps.map(e => e / sum);
+  const r = Math.random();
+  let cumulative = 0;
+  for (let i = 0; i < normalized.length; i++){
+    cumulative += normalized[i];
+    if (r <= cumulative) return i;
+  }
+  return normalized.length - 1;
+}
+
+let generatedTokens = [];
+
+async function generateMelody(){
+  const generateBtn = document.getElementById('generateBtn');
+  generateBtn.disabled = true;
+
+  const seedPhrase = phrasesAsTokens[Math.floor(Math.random() * phrasesAsTokens.length)];
+  const seedTokens = seedPhrase.length >= SEQ_LEN
+    ? seedPhrase.slice(0, SEQ_LEN)
+    : vocab.slice(0, SEQ_LEN);
+  let window = seedTokens.map(t => tokenToIdx.get(t));
+  const generatedIdx = [...window];
+
+  const NUM_STEPS = 48;
+  for (let step = 0; step < NUM_STEPS; step++){
+    const inputTensor = tf.tensor2d([window], [1, SEQ_LEN], 'int32');
+    const predTensor = model.predict(inputTensor);
+    const probs = await predTensor.data();
+    inputTensor.dispose();
+    predTensor.dispose();
+    const nextIdx = sampleWithTemperature(Array.from(probs), 0.85);
+    generatedIdx.push(nextIdx);
+    window = [...window.slice(1), nextIdx];
+  }
+
+  generatedTokens = generatedIdx.map(i => idxToToken[i]);
+  document.getElementById('genMeta').textContent = `${generatedTokens.length} notes generated`;
+  document.getElementById('emptyNote').style.display = 'none';
+  drawPianoRoll(generatedTokens);
+  document.getElementById('playBtn').disabled = false;
+  document.getElementById('downloadBtn').disabled = false;
+  generateBtn.disabled = false;
+}
+
+document.getElementById('generateBtn').addEventListener('click', generateMelody);
+
+/* ---------- Piano-roll visualization ---------- */
+function drawPianoRoll(tokens){
+  const canvas = document.getElementById('pianoRoll');
+  resizeCanvas(canvas);
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const notes = tokens.filter(t => !t.startsWith('REST'));
+  const pitches = notes.map(t => parseInt(t.split(':')[0], 10));
+  const minPitch = Math.min(...pitches) - 2;
+  const maxPitch = Math.max(...pitches) + 2;
+  const pitchRange = maxPitch - minPitch || 1;
+
+  let totalBeats = 0;
+  tokens.forEach(t => { totalBeats += parseFloat(t.split(':')[1]); });
+
+  let beatCursor = 0;
+  const pxPerBeat = w / (totalBeats || 1);
+
+  tokens.forEach(tok => {
+    const [pitchPart, durPart] = tok.split(':');
+    const dur = parseFloat(durPart);
+    if (pitchPart !== 'REST'){
+      const pitch = parseInt(pitchPart, 10);
+      const x = beatCursor * pxPerBeat;
+      const noteW = Math.max(2, dur * pxPerBeat - 2);
+      const y = h - ((pitch - minPitch) / pitchRange) * h;
+      const noteH = Math.max(3, h / pitchRange);
+      ctx.fillStyle = '#E0708A';
+      ctx.fillRect(x, y - noteH, noteW, noteH);
+    }
+    beatCursor += dur;
+  });
+}
+
+/* ---------- Playback via Web Audio (no external player needed) ---------- */
+let audioCtx = null;
+
+function playMelody(){
+  if (!generatedTokens.length) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let time = audioCtx.currentTime + 0.05;
+  const bpm = 100;
+  const secPerBeat = 60 / bpm;
+
+  generatedTokens.forEach(tok => {
+    const [pitchPart, durPart] = tok.split(':');
+    const dur = parseFloat(durPart) * secPerBeat;
+    if (pitchPart !== 'REST'){
+      const midi = parseInt(pitchPart, 10);
+      const freq = 440 * Math.pow(2, (midi - 69) / 12);
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(0.22, time + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + dur * 0.92);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(time);
+      osc.stop(time + dur);
+    }
+    time += dur;
+  });
+}
+
+document.getElementById('playBtn').addEventListener('click', playMelody);
+
+/* ---------- MIDI export — minimal Standard MIDI File writer, no library ---------- */
+function toVarLen(value){
+  const bytes = [value & 0x7F];
+  value >>= 7;
+  while (value > 0){
+    bytes.push((value & 0x7F) | 0x80);
+    value >>= 7;
+  }
+  return bytes.reverse();
+}
+
+function tokensToMidiBytes(tokens, ticksPerQuarter = 480, bpm = 100, velocity = 80){
+  const events = [];
+  const microsPerQuarter = Math.round(60000000 / bpm);
+  events.push(...toVarLen(0), 0xFF, 0x51, 0x03,
+    (microsPerQuarter >> 16) & 0xFF, (microsPerQuarter >> 8) & 0xFF, microsPerQuarter & 0xFF);
+
+  let pendingRestTicks = 0;
+  tokens.forEach(tok => {
+    const [pitchPart, durPart] = tok.split(':');
+    const ticks = Math.round(parseFloat(durPart) * ticksPerQuarter);
+    if (pitchPart === 'REST'){
+      pendingRestTicks += ticks;
+      return;
+    }
+    const pitch = parseInt(pitchPart, 10);
+    events.push(...toVarLen(pendingRestTicks), 0x90, pitch, velocity);
+    pendingRestTicks = 0;
+    events.push(...toVarLen(ticks), 0x80, pitch, 0);
+  });
+  events.push(...toVarLen(pendingRestTicks), 0xFF, 0x2F, 0x00);
+
+  const trackLen = events.length;
+  const header = [
+    0x4D, 0x54, 0x68, 0x64, 0x00, 0x00, 0x00, 0x06,
+    0x00, 0x00, 0x00, 0x01,
+    (ticksPerQuarter >> 8) & 0xFF, ticksPerQuarter & 0xFF,
+  ];
+  const trackHeader = [
+    0x4D, 0x54, 0x72, 0x6B,
+    (trackLen >> 24) & 0xFF, (trackLen >> 16) & 0xFF, (trackLen >> 8) & 0xFF, trackLen & 0xFF,
+  ];
+  return new Uint8Array([...header, ...trackHeader, ...events]);
+}
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  if (!generatedTokens.length) return;
+  const bytes = tokensToMidiBytes(generatedTokens);
+  const blob = new Blob([bytes], { type: 'audio/midi' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'generated_melody.mid';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+/* ---------- Init ---------- */
+trainBtn.disabled = false;
+window.addEventListener('resize', () => {
+  drawLossChart();
+  if (generatedTokens.length) drawPianoRoll(generatedTokens);
+});
+</script>
+</body>
+</html>
